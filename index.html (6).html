@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>منظومة الهلال الأحمر - جرابلس</title>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.0/dist/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <style>
+        :root { --red: #d32f2f; --dark: #2c3e50; }
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; margin: 0; text-align: center; }
+        .gate-card { background: white; padding: 30px; margin: 100px auto; max-width: 400px; border-radius: 20px; border-top: 10px solid var(--red); box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .btn { width: 100%; padding: 15px; margin: 10px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; color: white; font-size: 16px; }
+        .container { display: none; padding: 20px; max-width: 1000px; margin: 20px auto; background: white; border-radius: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: center; }
+        th { background: var(--dark); color: white; }
+        input, select { width: 90%; padding: 12px; margin: 10px; border-radius: 8px; border: 1px solid #ddd; }
+        .no-print { display: block; }
+        @media print { .no-print { display: none; } .print-area { display: block !important; } }
+        .print-area { display: none; text-align: center; padding: 50px; border: 3px solid #000; }
+    </style>
+</head>
+<body>
+
+<div id="gateScreen" class="gate-card no-print">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/7/7b/Red_Crescent_logo.svg/1200px-Red_Crescent_logo.svg.png" width="80">
+    <h2>منظومة جرابلس الرقمية</h2>
+    <button class="btn" style="background:#007bff" onclick="enter('recep')"><i class="fas fa-edit"></i> بوابة الاستقبال (آيباد)</button>
+    <button class="btn" style="background:#333" onclick="enter('doc')"><i class="fas fa-user-md"></i> بوابة الطبيب / الصيدلية</button>
+    <button class="btn" style="background:#6f42c1" onclick="enter('admin')"><i class="fas fa-user-tie"></i> بوابة المدير (إكسل + تصفير)</button>
+</div>
+
+<div id="app" class="container no-print">
+    <h2 id="pTitle">شعبة جرابلس</h2>
+    
+    <div id="adminTools" style="display:none; margin-bottom:20px; border: 2px dashed #ccc; padding: 15px;">
+        <button onclick="saveExcel()" style="background:green; color:white; padding:10px; border-radius:5px; border:none; cursor:pointer;"><i class="fas fa-file-excel"></i> تحميل إكسل</button>
+        <button onclick="resetDay()" style="background:red; color:white; padding:10px; border-radius:5px; border:none; cursor:pointer; margin-right:10px;"><i class="fas fa-trash"></i> تصفير اليوم</button>
+    </div>
+
+    <div id="recepForm" style="display:none;">
+        <input type="number" id="nid" placeholder="🔢 الرقم الوطني">
+        <input type="text" id="pname" placeholder="👤 اسم المريض">
+        <select id="pdoc"><option>د. فيصل</option><option>د. دهوم</option><option>الأسنان</option></select>
+        <button class="btn" style="background:var(--red)" onclick="sendPatient()">حفظ وإرسال أونلاين + طباعة 🖨️</button>
+    </div>
+
+    <div id="liveView">
+        <div id="tableContent">جاري جلب البيانات من السحابة...</div>
+    </div>
+    <br><button onclick="location.reload()" style="background:#666; color:white; padding:5px 15px; border:none; border-radius:5px; cursor:pointer;">خروج</button>
+</div>
+
+<div id="ticket" class="print-area">
+    <h1>الهلال الأحمر - جرابلس</h1><hr>
+    <h3 id="tName"></h3><h3 id="tNid"></h3><h3 id="tDoc"></h3>
+    <svg id="barcodeImg"></svg>
+</div>
+
+<script>
+    // --- الربط السحابي الجاهز (البسكوتة) ---
+    // لا تغير هذا الرابط، هو الذي يربط الآيباد بالكمبيوتر أونلاين
+    const config = { databaseURL: "https://sarc-jarabulus-default-rtdb.firebaseio.com" };
+    firebase.initializeApp(config);
+    const database = firebase.database();
+
+    function enter(mode) {
+        document.getElementById('gateScreen').style.display='none';
+        document.getElementById('app').style.display='block';
+        if(mode==='recep') {
+            document.getElementById('recepForm').style.display='block';
+            document.getElementById('pTitle').innerText = "بوابة الاستقبال";
+        } else if(mode==='admin') {
+            document.getElementById('adminTools').style.display='block';
+            document.getElementById('pTitle').innerText = "بوابة الإدارة العامة";
+        }
+        sync();
+    }
+
+    function sendPatient() {
+        const n = document.getElementById('pname').value;
+        const id = document.getElementById('nid').value;
+        const d = document.getElementById('pdoc').value;
+        if(!n || !id) return alert("البيانات ناقصة!");
+
+        const data = { name: n, nid: id, doc: d, time: new Date().toLocaleTimeString('ar-SY') };
+        database.ref('patients').push(data).then(() => {
+            document.getElementById('tName').innerText = "المريض: " + n;
+            document.getElementById('tNid').innerText = "الرقم: " + id;
+            document.getElementById('tDoc').innerText = "العيادة: " + d;
+            JsBarcode("#barcodeImg", id, {height: 45});
+            window.print();
+            document.getElementById('pname').value = ''; document.getElementById('nid').value = '';
+        });
+    }
+
+    let allPatients = [];
+    function sync() {
+        database.ref('patients').on('value', (snap) => {
+            const data = snap.val();
+            allPatients = [];
+            let h = `<table><tr><th>الاسم</th><th>العيادة</th><th>الرقم الوطني</th><th>الوقت</th></tr>`;
+            for(let key in data) {
+                allPatients.push(data[key]);
+                h += `<tr><td>${data[key].name}</td><td>${data[key].doc}</td><td>${data[key].nid}</td><td>${data[key].time}</td></tr>`;
+            }
+            document.getElementById('tableContent').innerHTML = h + "</table>";
+        });
+    }
+
+    function saveExcel() {
+        const ws = XLSX.utils.json_to_sheet(allPatients);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "SARC_Report");
+        XLSX.writeFile(wb, "تقرير_شعبة_جرابلس.xlsx");
+    }
+
+    function resetDay() {
+        if(confirm("هل تريد مسح بيانات اليوم بالكامل؟")) database.ref('patients').remove();
+    }
+</script>
+</body>
+</html>
